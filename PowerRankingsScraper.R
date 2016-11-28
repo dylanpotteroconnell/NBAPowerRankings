@@ -1,22 +1,31 @@
+# Dylan O'Connell
+# NBA Power Rankings Scraper
 
+# The set of team name codes used by reddit and basketball reference are different.
+# For easy iteration, we define each of these sets of 30 codes, in alphabetical order
+# The team codes used on the reddit website
 teamnames.reddit <- c("ATL", "BKN", "BOS", "CHA", "CHI", "CLE", "DAL", "DET", "DEN", 
                "GSW", "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", 
                "NOP", "NYK", "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", 
                "TOR", "UTA", "WAS")
 
-#BKN/BRK  #CHA/CHO #PHX/PHO
+# The team codes used on the basketball reference website
 teamnames.BBR <- c("ATL", "BRK", "BOS", "CHO", "CHI", "CLE", "DAL", "DET", "DEN", 
                    "GSW", "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", 
                    "NOP", "NYK", "OKC", "ORL", "PHI", "PHO", "POR", "SAC", "SAS", 
                    "TOR", "UTA", "WAS")
 
+
+# We write two functions, that simply scan a dataframe, and replace all
+# instances of any team codes that differ between reddit and BBR, and 
+# swap those codes to the other form.
 convertRedditToBBR <- function(x){
   x$team <- gsub("BKN", "BRK", x$team)
   x$team <- gsub("CHA", "CHO", x$team)
   x$team <- gsub("PHX", "PHO", x$team)
   x
 }
-
+# Same as above, but taking BBR codes and converting to reddit.
 convertBBRToReddit <- function(x){
   x$team <- gsub("BRK", "BKN", x$team)
   x$team <- gsub("CHO", "CHA", x$team)
@@ -24,6 +33,10 @@ convertBBRToReddit <- function(x){
   x
 }
 
+# We originally scraped the rankings from the 2016-2017 format.
+# These are not in the same format as the 2015-2016 season, so
+# we must change the code quite a bit. Left in for now, but do not 
+# use unless adjusted. For now, we focus on the 2015-2016 season.
 # scrapePowerRankings1617 <- function(URL, date){
 #   source <- "reddit"
 #   x <- data.frame(rankingdate=character(), source=character(), team=character(), teamrank=integer(), delta=character(), record=character())
@@ -40,13 +53,25 @@ convertBBRToReddit <- function(x){
 #   x
 # }
 
+# This takes in a URL of a reddit power ranking, and the date of said ranking,
+# and will return a dataframe where the rows are the team and its rank, with
+# the win/loss record and point differential of that team at the date of the ranking.
+# This only works for the reddit 2015-2016 power rankings
+# Date should be inputted in the format "%m.%d.%Y", as a string
 scrapePowerRankings1516 <- function(URL, date){
+  # We record that the source is "reddit", in case we later compile this dataframe
+  # with power rankings from other sites.
   source <- "reddit"
+  # Each row in x will correspond to one team's ranking at a certain date.
   x <- data.frame(rankingdate=character(), source=character(), team=character(), teamrank=integer(), 
                   delta=character(), record.w=integer(), record.l=integer(), avg.PD=numeric())
   thepage = readLines(URL)
   rankingdate <- as.POSIXct(date, format="%m.%d.%Y")
+  # We use getHistoricalStandings to get a list of team records and point differentials
+  # on this given date. This is in BBR form, so we convert it to the reddit team codes.
   standings <- convertBBRToReddit(getHistoricalStandings(rankingdate))
+  # Now, for each team, we get its ranking, and set its wins, losses, and point differential
+  # using the data in standings.
   for(team in teamnames.reddit){
     index <- grep(paste("<td align=\"left\"><a href=\"/", team, 
                         "\"></a> [A-z,0-9]+</td>", sep=""), thepage)#, value=TRUE)
@@ -54,42 +79,52 @@ scrapePowerRankings1516 <- function(URL, date){
     record.w <- standings[standings$team==team,]$wins
     record.l <- standings[standings$team==team,]$losses
     avg.PD <- standings[standings$team==team,]$avg.PD
+    # Each row of x is one ranking of a team
     x <- rbind(x, data.frame(rankingdate=rankingdate, source=source, team=team, teamrank=as.integer(teamrank), delta=NA, 
                              record.w=record.w, record.l=record.l, avg.PD=avg.PD))
   }
+  # As the BBR form of team codes is more standard, before returning our set of 
+  # power rankings, we convert it back to BBR form.
   convertRedditToBBR(x)
 }
 
-#http://www.basketball-reference.com/friv/standings.cgi?month=2&day=24&year=2016&lg_id=NBA
-
 
 # Given a date in history, this uses basketball reference to return a dataframe
-# containing the current standings of all teams in the league
+# containing the current standings of all teams in the league, as well as their 
+# average point differential.
 getHistoricalStandings <- function(date){
   day <- format(date, "%d")
   month <- format(date, "%m")
   year <- format(date, "%Y")
+  # We need to tell BBR a specific date to fetch the historical standings
   URL <- paste("http://www.basketball-reference.com/friv/standings.cgi?month=", month,"&day=", day, "&year=", year, "&lg_id=NBA", sep="")
   thepage = readLines(URL)
   x <- data.frame(date=character(), team=character(), wins=integer(), losses=integer(), avg.PD=numeric())
   thepage <- grep("full_table", thepage, value=TRUE)
+  # Sometimes, we may access a date that is not during the season. If there are not
+  # 30 teams in the standings, we simply return the standings as all NA
   if(length(thepage)==30){
+    # For each team, we get their standing information
     for(team in teamnames.BBR){
-      #print(team)
+      # We only look at the line that involves the specified team
       z <- grep(paste("/teams/", team, "/", sep=""), thepage, value=TRUE)
+      # We find the wins and losses of that team, as numeric variables
       wins <- as.numeric(gsub(".*data-stat=\\\"wins\\\" >([0-9]*)<.*", "\\1", z))
       losses <- as.numeric(gsub(".*data-stat=\\\"losses\\\" >([0-9]*)<.*", "\\1", z))
+      # We find their average points for (PF), points against (PA), and thus
+      # their average point differential per game is avg.PF-avg.PA
       avg.PF <- as.numeric(gsub(".*data-stat=\"pts_per_g\\\" >([0-9]*\\.?[0-9]*)<.*", "\\1", z))
-      #data-stat="pts_per_g" >113.9<
       avg.PA <- as.numeric(gsub(".*data-stat=\"opp_pts_per_g\\\" >([0-9]*\\.?[0-9]*)<.*", "\\1", z))
       avg.PD <- avg.PF - avg.PA
       x <- rbind(x, data.frame(date=date, team=team, 
                                wins=wins, losses=losses, avg.PD=avg.PD))
     }
+    # If there are not 30 teams in the standings, return NAs
   } else {
     x <- data.frame(date=rep(date,30), team=teamnames.BBR, 
                wins=rep(NA,30), losses=rep(NA,30), avg.PD=rep(NA,30))
   }
+  # This function returns the completed data frame of historical standings
   x
 }
 

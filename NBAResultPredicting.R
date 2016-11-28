@@ -87,10 +87,14 @@ for(i in 1:length(results$date)){
 }
 
 write.table(results, "prediction-16season.csv")
-#q <- read.table("prediction-16season.csv")
+results <- read.table("prediction-16season.csv")
 
+# We analyze these results
 summary(results$correct.PR)
 summary(results$correct.WL)
 summary(results$correct.PD)
-prop.test(c(737,742),c(388+737, 742+389), alternative="less", correct=FALSE)
-
+prop.PR <- 742/(383+742)
+prop.WL <- 722/(373+722)
+prop.PD <- 735/(735 + 389)
+prop.test(c(737,742),c(388+737, 742+389), alternative="greater", correct=FALSE)
+prop.WL.updated <- (722+15)/(373+722+30)
