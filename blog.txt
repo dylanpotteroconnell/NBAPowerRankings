@@ -1,0 +1,109 @@
+Monday, 7/25/2016
+
+Looking for a way to at least get boxscores into R. Want to use official stats.nba.com if possible. Most links describing how to do this are outdated. Now manually going into the boxscores on the website. On a tip from a forum post before, going into "network" on that page, and trying to find a .js file that contains all this data.
+
+Go into network, eventually find boxscoresummaryv2?GameID...
+Under headers, we find the request URL as  
+http://stats.nba.com/stats/boxscoresummaryv2?GameID=0021501205
+
+To learn how to read this into R, followed this post
+http://stackoverflow.com/questions/2617600/importing-data-from-a-json-file-into-r
+
+This successfully imported that specific Boxscore JSON into R, but presented two further issues. The data was imported as an odd nested list, that was not yet easily readable. Next, accessing these box scores en masse requires the GameID, so we would need some sort of way to generate a list of those (as needed).
+
+Tackling issue #1, that we can't yet read this. Couldn't find a direct way to do it automatically, and had trouble understanding the JSON file structure. Spent a lot of time fiddling with accessing different elements, trying to find what would let me put this into a matrix format. Eventually settled on
+
+boxscores <- data.frame(matrix(unlist(json_data$resultSets[[1]]$rowSet),
+                        byrow = T, 
+                        ncol = length(json_data$resultSets[[1]]$headers)))
+colnames(boxscores) <- json_data$resultSets[[1]]$headers
+
+which mostly handled it. But about midway through, the columns became offset (when the Milwaukee Bucks players began). 
+
+07.28.16
+The current issue is that null entries are dropped by unlist. We need to transform them into NA entries if we want to properly unlist. There doesn't seem to be a super simple way of doing this. first tried with lapply technique found online, but that seemed wto mess with the structure of it.
+
+Attempts at a more elegant solution didn't work. Crucially, the fact that my data was not all of the same type, and could be somewhat inconsistent in its structure, was an issue. The solution that worked was simply two nested looops, brute forcing each null value to NA. This is slow, and only works in this case because it is only 2 layers deep (at least, at the level we need to convert). This works for now.
+
+The next issue is to find some way to automate the process of finding these box scores. Crucially, we need to be able to find these gameIDs that stats.nba.com uses to denote each game. Perhaps we can find a list of gameIDs. We want a page that has a lot of games. I can't find a page that has a large list of games, but under the "scores" section of the site there are pages for each date that list scores. 
+
+http://stats.nba.com/scores/#!/04/02/2016
+
+As before, we try "network" and refresh. We examine the list of loaded files. Two promising ones include
+
+http://stats.nba.com/stats/commonallplayers?IsOnlyCurrentSeason=0&LeagueID=00&Season=2016-17
+This has nothing related to games. However, oddly enough, it seems to be a comprehensive (?) list of players, which includes their playerID. This seems to match the playerID used by the boxscores.
+
+http://stats.nba.com/stats/scoreboardV2?DayOffset=0&LeagueID=00&gameDate=04%2F02%2F2016
+This seems more like what we want to use. Under preview, it seems to list games, as well as various statistics associated with them. However, when we follow the link in the header, we get an "Access Denied" error. I don't know the mechanics of these websites, but this might be an intractable issue. We do eventually see this data, but we must not be able to request it ourselves, the website might need to do it for us?
+
+Quick sidenote. The double loop to replace null with NA (once already an object in R) seemed awkward. Another search stumbled on a possibly better approach. RJSONIO seems to have a way to modify how null elements are added in fromJSON. Unfortunately, RJSON does not have that feature. I was hesitant to change, due to some reports that RJSON was faster than RJSONIO (premature optimization is a bad idea, but my possible uses for this involved compiling thousands of boxscores, so this seemed like a nontrivial concern. However, I did see some conflicting information on whether RJSON was actually faster than RJSONIO). However, I saw a suggestion that one could simply replace "null" with "NA" in the text string itself before it is converted to an R object. We want to replace .
+
+for(i in 1:length(BSD))
+  for(j in 1:length(BSD[[i]])) # second level
+    if(is.null(BSD[[i]][[j]])) BSD[[i]][[j]]<-NA
+
+However, there were some issues. We can easily replace with "null" with "na" in our string. But then, fromJSON had trouble understanding the "NA" used. IT couldn't be a string, it had to be the NA object itself. I needed to figure out what RJSON's fromJSON expcted to see for "NA" values. I did this basic test.
+
+toJSON(c(1,2,NA,4))
+
+which outputs
+
+"[1,2,\"NA\",4]"
+
+so I wanted to my string input to try and match that. It took a ton of trial and error, but eventually I understood how RJSON figured this all out. The necessary command was 
+
+gsub(pattern = "null", 
+                          replacement = "\"NA\"", 
+                          paste(readLines(json_file), 
+                                collapse=""))
+
+My misunderstanding was about how the pasted json_file worked. I didn't understand that within a quoted string, /" meant that the quotes would be part of the string. Thus, within the whole pasted string, string elements were encoded as /"STRING/", so that the quotations would be preserved when fromJSON read the entire input string. This was also needed for NA.
+
+Next was to verify that this conversion worked. I found the basic command to access the elements of a data frame (boxscore[x,y]). However, that returned a set of levels as well as a value. It turns out that each column and row seemed to be stored as factors. TThis was quite puzzling at first, as my searching somehow didn't find a cleaer way of how to access just an element, rather than both an element and the set of levels in its factor. I tried converting columns to not being factors using as.numeric(as.character(boxscore[13,])). This seemed to make NA highlight better, but produced some funky results. 
+
+7.29.16
+I realized that I hadn't noticed that this was a larger issue. The columns were all stored as factors, but many of them should not be. Cleaning this data into the right format should be the next step, and may fix some of my issues.
+
+First, I began with the IDs (game, player, team), which should not be factors, but integers. Simply converting to numeric or integer (using as.numeric) lead to an odd result, and the wrong data (I think it might have simply been the number of the factor it was?). Howver, using 
+
+boxscore$GAME_ID<- as.integer(as.character(boxscore$GAME_ID))
+
+worked. I don't quite understand why as.character first fixed this issue, need to find out. I do not know if there is a way to do this more automated (although I doubt it, as determining integer vs character vs etc requires knowledge of what the data means). For minutes, the time data type in R seemed to be used for storing dates, so I left this as a character for now. (storing it as Seconds would probably be the easiest solution).
+
+7.30.16
+This brings us back to the issue of finding the TeamIDs. The NBA scores schedule page loaded a JSON file that had a list of the game data for that day. However, when I copied the link to that file, and loaded it in a browser, my access was denied (even though I could view the contents of the fiel in Network).  I don't know how these websites work, but assume that somehow I cna't make the request, but the website needs to.
+
+I next navigatedd to the team stats homepage. There, the website loaded this file
+
+http://stats.nba.com/stats/teamgamelog?LeagueID=00&Season=2015-16&SeasonType=Regular+Season&TeamID=1610612752
+
+Teamgamelog seems to be more what we're looking for. Could maybe even fully automate this once we get a list of TeamIDs.7.30.16
+This brings us back to the issue of finding the TeamIDs. The NBA scores schedule page loaded a JSON file that had a list of the game data for that day. However, when I copied the link to that file, and loaded it in a browser, my access was denied (even though I could view the contents of the fiel in Network).  I don't know how these websites work, but assume that somehow I cna't make the request, but the website needs to.
+
+I next navigatedd to the team stats homepage. There, the website loaded this file
+
+http://stats.nba.com/stats/teamgamelog?LeagueID=00&Season=2015-16&SeasonType=Regular+Season&TeamID=1610612752
+
+Teamgamelog seems to be more what we're looking for. Could maybe even fully automate this once we get a list of TeamIDs.7.30.16
+This brings us back to the issue of finding the TeamIDs. The NBA scores schedule page loaded a JSON file that had a list of the game data for that day. However, when I copied the link to that file, and loaded it in a browser, my access was denied (even though I could view the contents of the fiel in Network).  I don't know how these websites work, but assume that somehow I cna't make the request, but the website needs to.
+
+I next navigatedd to the team stats homepage. There, the website loaded this file
+
+http://stats.nba.com/stats/teamgamelog?LeagueID=00&Season=2015-16&SeasonType=Regular+Season&TeamID=1610612752
+
+Teamgamelog seems to be more what we're looking for. Could maybe even fully automate this once we get a list of TeamIDs.7.30.16
+This brings us back to the issue of finding the TeamIDs. The NBA scores schedule page loaded a JSON file that had a list of the game data for that day. However, when I copied the link to that file, and loaded it in a browser, my access was denied (even though I could view the contents of the fiel in Network).  I don't know how these websites work, but assume that somehow I cna't make the request, but the website needs to.
+
+I next navigatedd to the team stats homepage. There, the website loaded this file
+
+http://stats.nba.com/stats/teamgamelog?LeagueID=00&Season=2015-16&SeasonType=Regular+Season&TeamID=1610612752
+
+Teamgamelog seems to be more what we're looking for. Could maybe even fully automate this once we get a list of TeamIDs.7.30.16
+This brings us back to the issue of finding the TeamIDs. The NBA scores schedule page loaded a JSON file that had a list of the game data for that day. However, when I copied the link to that file, and loaded it in a browser, my access was denied (even though I could view the contents of the fiel in Network).  I don't know how these websites work, but assume that somehow I cna't make the request, but the website needs to.
+
+I next navigatedd to the team stats homepage. There, the website loaded this file
+
+http://stats.nba.com/stats/teamgamelog?LeagueID=00&Season=2015-16&SeasonType=Regular+Season&TeamID=1610612752
+
+Teamgamelog seems to be more what we're looking for. Could maybe even fully automate this once we get a list of TeamIDs.
